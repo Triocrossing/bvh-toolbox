@@ -72,7 +72,7 @@ def main(argv=sys.argv[1:]):
         description="""Convert BVH files to CSV table format.""",
         epilog="""If neither -p nor -r are specified, both rotation and position CSV files will be created for each BVH file.""",
         formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument("-v", "--ver", action='version', version='%(prog)s 0.1')
+    parser.add_argument("-v", "--ver", action='version', version='%(prog)s 0.1, adpated by Xi WANG')
     parser.add_argument("-o", "--out", type=str, default='',
                         help="Destination folder for CSV files.\n"
                              "If no destination path is given, BVH file path is used.\n"

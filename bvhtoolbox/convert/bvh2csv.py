@@ -37,8 +37,84 @@ import transforms3d as t3d
 
 from bvhtoolbox import BvhTree
 from bvhtoolbox import get_affines
+from bvhtoolbox import bvhtransforms 
 
+def write_joint_positions_and_rotations(bvh_tree, filepathTR, filepathTQ, scale=1, end_sites=False):
+    """Write joints' world positional data to a CSV file.
+    
+    :param bvh_tree: BVH tree that holds the data.
+    :type bvh_tree: BvhTree
+    :param filepathTR: Destination file path for CSV file for translation and rotation
+    :type filepathTR: str
+    :param filepathTQ: Destination file path for CSV file for translation and quaternion
+    :type filepathTQ: str
+    :param scale: Scale factor for root position and offset values.
+    :type scale: float
+    :param end_sites: Include BVH End Sites in position CSV.
+    :type end_sites: bool
+    :return: If the write process was successful or not.
+    :rtype: bool
+    """
+    time_col = np.arange(0, bvh_tree.nframes * bvh_tree.frame_time, bvh_tree.frame_time)[:, None]
+    data_list = [time_col]
+    header = ['time']
+    root = next(bvh_tree.root.filter('ROOT'))
+    
+    def get_world_positions(joint):
+        if joint.value[0] == 'End':
+            joint.world_transforms = np.tile(t3d.affines.compose(np.zeros(3), np.eye(3), np.ones(3)),
+                                             (bvh_tree.nframes, 1, 1))
+        else:
+            channels = bvh_tree.joint_channels(joint.name)
+            axes_order = ''.join([ch[:1] for ch in channels if ch[1:] == 'rotation']).lower()  # FixMe: This isn't going to work when not all rotation channels are present
+            axes_order = 's' + axes_order[::-1]
+            joint.world_transforms = get_affines(bvh_tree, joint.name, axes=axes_order)
+            
+        if joint != root:
+            # For joints substitute position for offsets.
+            offset = [float(o) for o in joint['OFFSET']]
+            joint.world_transforms[:, :3, 3] = offset
+            joint.world_transforms = np.matmul(joint.parent.world_transforms, joint.world_transforms)
+        if scale != 1.0:
+            joint.world_transforms[:, :3, 3] *= scale
+            
+        header.extend(['{}_{}'.format(joint.name, channel) for channel in 'xyz'])
+        pos = joint.world_transforms[:, :3, 3]
+        data_list.append(pos)
+        
+        if end_sites:
+            end = list(joint.filter('End'))
+            if end:
+                get_world_positions(end[0])  # There can be only one End Site per joint.
+        for child in joint.filter('JOINT'):
+            get_world_positions(child)
+    
+    get_world_positions(root)
+    data = np.concatenate(data_list, axis=1)
+    
+    # Rotational Part
+    for joint in bvh_tree.get_joints():
+        channels = [channel for channel in bvh_tree.joint_channels(joint.name) if channel[1:] == 'rotation']
+        header.extend(['{}_{}'.format(joint.name, channel[:1].lower()) for channel in channels])
+        data_list.append(np.array(bvh_tree.frames_joint_channels(joint.name, channels)))
+        listQn = bvhtransforms.get_quaternions(bvh_tree, joint.name)
+    
+    # Originally wxyz 
+    # change to xyzw
+    listQn[:,[0,1,2,3]] = listQn[:,[1,2,3,0]] 
+    listQn = np.array(listQn)
+    quaternionData = np.concatenate((data, listQn), axis=1)
+    data = np.concatenate(data_list, axis=1)
 
+    try:
+        np.savetxt(filepathTR, data, header=','.join(header), fmt='%10.5f', delimiter=',', comments='')
+        np.savetxt(filepathTQ, quaternionData, fmt='%10.5f', delimiter=',', comments='')
+        return True
+    except IOError as e:
+        print("ERROR({}): Could not write to file {}.\n"
+              "Make sure you have writing permissions.\n".format(e.errno, filepathTR))
+        return False
+ 
 def write_joint_rotations(bvh_tree, filepath):
     """Write joints' rotation data to a CSV file.
 
@@ -212,6 +288,8 @@ def bvh2csv(bvh_filepath,
         pos_success = write_joint_positions(mocap, dst_filepath + '_pos.csv', scale, end_sites)
     if export_rotation:
         rot_success = write_joint_rotations(mocap, dst_filepath + '_rot.csv')
+    if export_rotation and export_position:
+        rot_success = write_joint_positions_and_rotations(mocap, dst_filepath + '_pos_rot.csv', dst_filepath + '_pos_quaternion.csv')
     if export_hierarchy:
         hierarchy_success = write_joint_hierarchy(mocap, dst_filepath + '_hierarchy.csv', scale)
 
@@ -222,10 +300,10 @@ def bvh2csv(bvh_filepath,
 def main(argv=sys.argv[1:]):
     parser = argparse.ArgumentParser(
         prog=__file__,
-        description="""Convert BVH file to CSV table format.""",
+        description="""Convert BVH file to CSV table format, quaternion version.""",
         epilog="""If neither -p nor -r are specified, both CSV files will be created.""",
         formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument("-v", "--ver", action='version', version='%(prog)s 0.1')
+    parser.add_argument("-v", "--ver", action='version', version='%(prog)s 0.1, adapted verison by Xi WANG ;)')
     parser.add_argument("-o", "--out", type=str, default='', help="Destination folder for CSV files.\n"
                                                             "If no destination path is given, BVH file path is used.\n"
                                                             "CSV files will have the source file base name appended by\n"
